@@ -24,13 +24,113 @@ public class PresencePoller
     {
         _graphClient = graphClient;
         _tableServiceClient = tableServiceClient;
-        _securityGroupId = configuration["SecurityGroupId"]
-            ?? throw new InvalidOperationException("SecurityGroupId is not configured.");
+        _securityGroupId = configuration["SecurityGroupId"] ?? "";
         _logger = logger;
     }
 
     [Function("PresencePoller")]
     public async Task Run([TimerTrigger("0 0 0 * * *")] TimerInfo timerInfo)
+    {
+        var debugMode = Environment.GetEnvironmentVariable("DEBUG_SELF_PRESENCE");
+        if (string.Equals(debugMode, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            await RunDebugSelfPresence();
+            return;
+        }
+
+        await RunProductionPolling();
+    }
+
+    private async Task RunDebugSelfPresence()
+    {
+        _logger.LogInformation("DEBUG: Polling own presence at {Time}", DateTime.UtcNow);
+
+        var tableClient = _tableServiceClient.GetTableClient(TableName);
+        await tableClient.CreateIfNotExistsAsync();
+
+        var me = await _graphClient.Me.GetAsync(config =>
+        {
+            config.QueryParameters.Select = ["id", "displayName"];
+        });
+
+        if (me?.Id == null)
+        {
+            _logger.LogError("DEBUG: Could not retrieve current user");
+            return;
+        }
+
+        var presence = await _graphClient.Me.Presence.GetAsync();
+        if (presence == null)
+        {
+            _logger.LogError("DEBUG: Could not retrieve presence for current user");
+            return;
+        }
+
+        var userId = me.Id;
+        var displayName = me.DisplayName ?? "Unknown";
+        var availability = presence.Availability ?? "Unknown";
+        var activity = presence.Activity ?? "Unknown";
+        var now = DateTimeOffset.UtcNow;
+
+        _logger.LogInformation(
+            "DEBUG: {DisplayName} | Availability: {Availability} | Activity: {Activity}",
+            displayName, availability, activity);
+
+        // Check for existing record
+        PresenceRecord? existing = null;
+        try
+        {
+            var response = await tableClient.GetEntityAsync<PresenceRecord>("CURRENT", userId);
+            existing = response?.Value;
+        }
+        catch (Azure.RequestFailedException ex) when (ex.Status == 404) { }
+
+        if (existing != null && existing.Availability == availability && existing.Activity == activity)
+        {
+            _logger.LogInformation("DEBUG: No status change detected");
+            return;
+        }
+
+        if (existing != null)
+        {
+            // Archive previous state
+            var historyRowKey = (DateTimeOffset.MaxValue.Ticks - existing.StartTime.Ticks)
+                .ToString("D19");
+            var historyRecord = new PresenceRecord
+            {
+                PartitionKey = userId,
+                RowKey = historyRowKey,
+                UserId = userId,
+                DisplayName = existing.DisplayName,
+                Availability = existing.Availability,
+                Activity = existing.Activity,
+                StartTime = existing.StartTime,
+                EndTime = now
+            };
+            await tableClient.UpsertEntityAsync(historyRecord);
+
+            _logger.LogInformation(
+                "DEBUG: Status changed: {OldAvail} -> {NewAvail} | {OldActivity} -> {NewActivity}",
+                existing.Availability, availability, existing.Activity, activity);
+        }
+
+        // Upsert current status
+        var currentRecord = new PresenceRecord
+        {
+            PartitionKey = "CURRENT",
+            RowKey = userId,
+            UserId = userId,
+            DisplayName = displayName,
+            Availability = availability,
+            Activity = activity,
+            StartTime = now,
+            EndTime = null
+        };
+        await tableClient.UpsertEntityAsync(currentRecord);
+        _logger.LogInformation("DEBUG: Presence record saved");
+    }
+
+    private async Task RunProductionPolling()
     {
         _logger.LogInformation("Presence polling started at {Time}", DateTime.UtcNow);
 
