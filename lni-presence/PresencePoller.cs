@@ -22,7 +22,7 @@ namespace lni_presence
         }
 
         [Function("PresencePoller")]
-        public async Task Run([TimerTrigger("0 */1 * * * *")] TimerInfo timerInfo)
+        public async Task Run([TimerTrigger("0 0 0 * * *")] TimerInfo timerInfo)
         {
             _logger.LogInformation("Presence polling started at {Time}", DateTime.UtcNow);
 
