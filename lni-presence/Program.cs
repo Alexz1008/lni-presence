@@ -11,7 +11,10 @@ var host = new HostBuilder()
     {
         services.AddSingleton(_ =>
         {
-            var credential = new DefaultAzureCredential();
+            var credential = new ClientSecretCredential(
+                context.Configuration["GraphTenantId"],
+                context.Configuration["GraphClientId"],
+                context.Configuration["GraphClientSecret"]);
             return new GraphServiceClient(credential, ["https://graph.microsoft.com/.default"]);
         });
 
