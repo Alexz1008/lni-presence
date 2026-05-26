@@ -1,6 +1,6 @@
-using Azure.Data.Tables;
 using Azure.Identity;
 using Microsoft.Azure.Functions.Worker;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Graph;
@@ -35,11 +35,9 @@ var host = new HostBuilder()
             }
         });
 
-        services.AddSingleton(_ =>
-        {
-            var connectionString = context.Configuration["AzureWebJobsStorage"];
-            return new TableServiceClient(connectionString);
-        });
+        var sqlConnectionString = context.Configuration["SqlConnectionString"];
+        services.AddDbContext<lni_presence.PresenceDbContext>(options =>
+            options.UseSqlServer(sqlConnectionString));
     })
     .Build();
 
