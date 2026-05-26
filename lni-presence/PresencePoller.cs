@@ -28,7 +28,7 @@ public class PresencePoller
     }
 
     [Function("PresencePoller")]
-    public async Task Run([TimerTrigger("0 0 0 * * *")] TimerInfo timerInfo)
+    public async Task Run([TimerTrigger("0 * * * * *")] TimerInfo timerInfo)
     {
         await _db.Database.EnsureCreatedAsync();
 
