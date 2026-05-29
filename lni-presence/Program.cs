@@ -35,18 +35,9 @@ var host = new HostBuilder()
             }
         });
 
-<<<<<<< HEAD
-        services.AddSingleton(_ =>
-        {
-            var storageAccountName = context.Configuration["StorageAccountName"];
-            var tableServiceUri = new Uri($"https://{storageAccountName}.table.core.windows.net");
-            return new TableServiceClient(tableServiceUri, new DefaultAzureCredential());
-        });
-=======
         var sqlConnectionString = context.Configuration["SqlConnectionString"];
         services.AddDbContext<lni_presence.PresenceDbContext>(options =>
             options.UseSqlServer(sqlConnectionString));
->>>>>>> 6ebde1726679e7fef68c65c32be4de6be319e1ab
     })
     .Build();
 
