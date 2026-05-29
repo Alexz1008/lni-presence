@@ -34,8 +34,9 @@ var host = new HostBuilder()
 
         services.AddSingleton(_ =>
         {
-            var connectionString = context.Configuration["AzureWebJobsStorage"];
-            return new TableServiceClient(connectionString);
+            var storageAccountName = context.Configuration["StorageAccountName"];
+            var tableServiceUri = new Uri($"https://{storageAccountName}.table.core.windows.net");
+            return new TableServiceClient(tableServiceUri, new DefaultAzureCredential());
         });
     })
     .Build();
