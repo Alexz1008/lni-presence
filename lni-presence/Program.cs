@@ -1,6 +1,6 @@
-using Azure.Data.Tables;
 using Azure.Identity;
 using Microsoft.Azure.Functions.Worker;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Graph;
@@ -27,17 +27,26 @@ var host = new HostBuilder()
             }
             else
             {
-                var credential = new DefaultAzureCredential();
+                var credential = new ClientSecretCredential(
+                    context.Configuration["GraphTenantId"],
+                    context.Configuration["GraphClientId"],
+                    context.Configuration["GraphClientSecret"]);
                 return new GraphServiceClient(credential, ["https://graph.microsoft.com/.default"]);
             }
         });
 
+<<<<<<< HEAD
         services.AddSingleton(_ =>
         {
             var storageAccountName = context.Configuration["StorageAccountName"];
             var tableServiceUri = new Uri($"https://{storageAccountName}.table.core.windows.net");
             return new TableServiceClient(tableServiceUri, new DefaultAzureCredential());
         });
+=======
+        var sqlConnectionString = context.Configuration["SqlConnectionString"];
+        services.AddDbContext<lni_presence.PresenceDbContext>(options =>
+            options.UseSqlServer(sqlConnectionString));
+>>>>>>> 6ebde1726679e7fef68c65c32be4de6be319e1ab
     })
     .Build();
 
