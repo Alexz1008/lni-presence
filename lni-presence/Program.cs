@@ -3,19 +3,22 @@ using Microsoft.Azure.Functions.Worker;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 
 var host = new HostBuilder()
     .ConfigureFunctionsWorkerDefaults()
     .ConfigureServices((context, services) =>
     {
-        services.AddSingleton(_ =>
+        services.AddSingleton(sp =>
         {
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("GraphClientSetup");
             var debugMode = context.Configuration["DEBUG_SELF_PRESENCE"];
             if (string.Equals(debugMode, "true", StringComparison.OrdinalIgnoreCase))
             {
                 var tenantId = context.Configuration["AZURE_TENANT_ID"];
                 var clientId = context.Configuration["AZURE_CLIENT_ID"];
+                logger.LogInformation("Graph client using InteractiveBrowserCredential with ClientId: {ClientId}, TenantId: {TenantId}", clientId, tenantId);
                 var credential = new InteractiveBrowserCredential(
                     new InteractiveBrowserCredentialOptions
                     {
@@ -27,9 +30,12 @@ var host = new HostBuilder()
             }
             else
             {
+                var tenantId = context.Configuration["GraphTenantId"];
+                var clientId = context.Configuration["GraphClientId"];
+                logger.LogInformation("Graph client using ClientSecretCredential with ClientId: {ClientId}, TenantId: {TenantId}", clientId, tenantId);
                 var credential = new ClientSecretCredential(
-                    context.Configuration["GraphTenantId"],
-                    context.Configuration["GraphClientId"],
+                    tenantId,
+                    clientId,
                     context.Configuration["GraphClientSecret"]);
                 return new GraphServiceClient(credential, ["https://graph.microsoft.com/.default"]);
             }

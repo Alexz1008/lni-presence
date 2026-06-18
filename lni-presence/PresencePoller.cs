@@ -13,6 +13,7 @@ public class PresencePoller
     private readonly GraphServiceClient _graphClient;
     private readonly PresenceDbContext _db;
     private readonly string _securityGroupId;
+    private readonly string _clientId;
     private readonly ILogger<PresencePoller> _logger;
 
     public PresencePoller(
@@ -24,6 +25,7 @@ public class PresencePoller
         _graphClient = graphClient;
         _db = db;
         _securityGroupId = configuration["SecurityGroupId"] ?? "";
+        _clientId = configuration["GraphClientId"] ?? configuration["AZURE_CLIENT_ID"] ?? "(unknown)";
         _logger = logger;
     }
 
@@ -46,10 +48,20 @@ public class PresencePoller
     {
         _logger.LogInformation("DEBUG: Polling own presence at {Time}", DateTime.UtcNow);
 
-        var me = await _graphClient.Me.GetAsync(config =>
+        User? me;
+        try
         {
-            config.QueryParameters.Select = ["id", "displayName"];
-        });
+            me = await _graphClient.Me.GetAsync(config =>
+            {
+                config.QueryParameters.Select = ["id", "displayName"];
+            });
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+        {
+            _logger.LogError("DEBUG: Graph API permissions error fetching current user (ClientId: {ClientId}): {Code} - {Message}",
+                _clientId, ex.Error?.Code, ex.Error?.Message);
+            return;
+        }
 
         if (me?.Id == null)
         {
@@ -57,7 +69,18 @@ public class PresencePoller
             return;
         }
 
-        var presence = await _graphClient.Me.Presence.GetAsync();
+        Presence? presence;
+        try
+        {
+            presence = await _graphClient.Me.Presence.GetAsync();
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+        {
+            _logger.LogError("DEBUG: Graph API permissions error fetching presence (ClientId: {ClientId}): {Code} - {Message}",
+                _clientId, ex.Error?.Code, ex.Error?.Message);
+            return;
+        }
+
         if (presence == null)
         {
             _logger.LogError("DEBUG: Could not retrieve presence for current user");
@@ -116,37 +139,46 @@ public class PresencePoller
         var userIds = new List<string>();
         var userNames = new Dictionary<string, string>();
 
-        var membersResponse = await _graphClient.Groups[_securityGroupId].Members
-            .GetAsync(config =>
-            {
-                config.QueryParameters.Top = 100;
-                config.QueryParameters.Select = ["id", "displayName"];
-            });
-
-        while (membersResponse?.Value != null)
+        try
         {
-            foreach (var member in membersResponse.Value)
-            {
-                if (member is User user && user.Id != null)
+            var membersResponse = await _graphClient.Groups[_securityGroupId].Members
+                .GetAsync(config =>
                 {
-                    userIds.Add(user.Id);
-                    userNames[user.Id] = user.DisplayName ?? "Unknown";
+                    config.QueryParameters.Top = 100;
+                    config.QueryParameters.Select = ["id", "displayName"];
+                });
+
+            while (membersResponse?.Value != null)
+            {
+                foreach (var member in membersResponse.Value)
+                {
+                    if (member is User user && user.Id != null)
+                    {
+                        userIds.Add(user.Id);
+                        userNames[user.Id] = user.DisplayName ?? "Unknown";
+                    }
+                }
+
+                if (membersResponse.OdataNextLink != null)
+                {
+                    membersResponse = await _graphClient.Groups[_securityGroupId].Members
+                        .GetAsync(config =>
+                        {
+                            config.QueryParameters.Top = 100;
+                            config.QueryParameters.Skip = userIds.Count;
+                        });
+                }
+                else
+                {
+                    break;
                 }
             }
-
-            if (membersResponse.OdataNextLink != null)
-            {
-                membersResponse = await _graphClient.Groups[_securityGroupId].Members
-                    .GetAsync(config =>
-                    {
-                        config.QueryParameters.Top = 100;
-                        config.QueryParameters.Skip = userIds.Count;
-                    });
-            }
-            else
-            {
-                break;
-            }
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+        {
+            _logger.LogError("Graph API permissions error fetching group members for '{GroupId}' (ClientId: {ClientId}): {Code} - {Message}",
+                _securityGroupId, _clientId, ex.Error?.Code, ex.Error?.Message);
+            return;
         }
 
         _logger.LogInformation("Found {Count} users in security group", userIds.Count);
@@ -164,11 +196,20 @@ public class PresencePoller
         {
             var batch = userIds.Skip(i).Take(batchSize).ToList();
             var requestBody = new GetPresencesByUserIdPostRequestBody { Ids = batch };
-            var presenceResponse = await _graphClient.Communications.GetPresencesByUserId
-                .PostAsGetPresencesByUserIdPostResponseAsync(requestBody);
+            try
+            {
+                var presenceResponse = await _graphClient.Communications.GetPresencesByUserId
+                    .PostAsGetPresencesByUserIdPostResponseAsync(requestBody);
 
-            if (presenceResponse?.Value != null)
-                allPresence.AddRange(presenceResponse.Value);
+                if (presenceResponse?.Value != null)
+                    allPresence.AddRange(presenceResponse.Value);
+            }
+            catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+            {
+                _logger.LogError("Graph API permissions error fetching presence data (ClientId: {ClientId}): {Code} - {Message}",
+                    _clientId, ex.Error?.Code, ex.Error?.Message);
+                return;
+            }
         }
 
         // Step 4: Compare with previous state and write changes
