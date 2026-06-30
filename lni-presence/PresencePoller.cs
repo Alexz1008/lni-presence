@@ -145,33 +145,59 @@ public class PresencePoller
                 .GetAsync(config =>
                 {
                     config.QueryParameters.Top = 100;
-                    config.QueryParameters.Select = ["id", "displayName"];
+                    config.QueryParameters.Select = ["id", "displayName", "userPrincipalName", "mail"];
                 });
 
+            int missingNameCount = 0;
+            int nonUserMemberCount = 0;
             while (membersResponse?.Value != null)
             {
                 foreach (var member in membersResponse.Value)
                 {
                     if (member is User user && user.Id != null)
                     {
+                        // Fall back to UPN/mail so a missing displayName is still identifiable.
+                        var resolvedName = user.DisplayName ?? user.UserPrincipalName ?? user.Mail;
+                        if (resolvedName == null)
+                        {
+                            missingNameCount++;
+                            _logger.LogWarning(
+                                "Group member {UserId} has no displayName/userPrincipalName/mail. " +
+                                "Ensure the app has User.Read.All or Directory.Read.All consented.",
+                                user.Id);
+                        }
+
                         userIds.Add(user.Id);
-                        userNames[user.Id] = user.DisplayName ?? "Unknown";
+                        userNames[user.Id] = resolvedName ?? "Unknown";
+                    }
+                    else
+                    {
+                        // Service principals, devices, or nested groups are not pollable for presence.
+                        nonUserMemberCount++;
                     }
                 }
 
                 if (membersResponse.OdataNextLink != null)
                 {
+                    // Follow the server-provided nextLink. Graph does NOT support $skip on
+                    // directory collections, and the nextLink already preserves the original
+                    // $select/$top, so we must not rebuild the request manually.
                     membersResponse = await _graphClient.Groups[_securityGroupId].Members
-                        .GetAsync(config =>
-                        {
-                            config.QueryParameters.Top = 100;
-                            config.QueryParameters.Skip = userIds.Count;
-                        });
+                        .WithUrl(membersResponse.OdataNextLink)
+                        .GetAsync();
                 }
                 else
                 {
                     break;
                 }
+            }
+
+            if (missingNameCount > 0 || nonUserMemberCount > 0)
+            {
+                _logger.LogWarning(
+                    "Member resolution: {MissingNames} user(s) had no resolvable name, " +
+                    "{NonUsers} member(s) were not users (skipped).",
+                    missingNameCount, nonUserMemberCount);
             }
         }
         catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
@@ -223,7 +249,14 @@ public class PresencePoller
             var userId = presence.Id;
             var availability = presence.Availability ?? "Unknown";
             var activity = presence.Activity ?? "Unknown";
-            var displayName = userNames.GetValueOrDefault(userId, "Unknown");
+            if (!userNames.TryGetValue(userId, out var displayName))
+            {
+                displayName = "Unknown";
+                _logger.LogWarning(
+                    "Presence returned for user {UserId} that was not in the group member list; " +
+                    "name could not be resolved.",
+                    userId);
+            }
 
             if (currentRecords.TryGetValue(userId, out var existing))
             {
